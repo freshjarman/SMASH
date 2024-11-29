@@ -8,6 +8,9 @@ This code is for SMASH main experiment on three marked STPP datasets: Earthquake
 - Python >= 3.7
 - PyTorch == 2.0.1
 
+## Data
+
+Refer to the repo [DSTPP](https://github.com/tsinghua-fib-lab/Spatio-temporal-Diffusion-Point-Processes).
 
 ## Model Training
 
