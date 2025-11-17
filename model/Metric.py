@@ -4,12 +4,24 @@ import numpy as np
 
 
 def time_intervals(t, target_levels):
-    """Only use output intervals"""
 
     # Time distribution
     # Estimate the PDF using KDE
-    t_pdf = gaussian_kde(t)  # 已拟合的 KDE 对象
-    x = np.linspace(min(t), max(t), 100)  # 采样网格
+    # Convert to numpy if it's a tensor and ensure it's 1D
+    if hasattr(t, 'numpy'):
+        t_np = t.numpy().flatten()
+    else:
+        t_np = np.array(t).flatten()
+
+    # Check if we have enough samples
+    if len(t_np) < 2:
+        # If too few samples, create a simple interval based on min/max
+        t_min, t_max = t_np.min(), t_np.max()
+        intervals = [(t_min, t_max) for _ in target_levels]
+        return intervals, None, None, None
+
+    t_pdf = gaussian_kde(t_np)
+    x = np.linspace(min(t_np), max(t_np), 100)  # 采样网格
     t_pdf_values = t_pdf(x)
     t_pdf_values = t_pdf_values.reshape(x.shape)  # x 上的概率密度值
 
@@ -24,17 +36,28 @@ def time_intervals(t, target_levels):
 
             intervals.append((0, x[right_idx]))  # TPP中SMASH论文中默设了t上的置信区间的左值为0
 
-        return intervals  # list[(left, right)] 每个置信水平对应的区间
+        return intervals  # Find credible intervals for 68% and 95% levels
 
-    # Find credible intervals for 68% and 95% levels
     intervals = find_credible_intervals(x, t_pdf_values, target_levels)
     return intervals, t_pdf, x, t_pdf_values
 
 
 def loc_level(loc, target_levels):
-    loc_pdf = gaussian_kde(loc.T)
-    x = np.linspace(min(loc[:, 0]), max(loc[:, 0]), 100)
-    y = np.linspace(min(loc[:, 1]), max(loc[:, 1]), 100)
+    # Convert to numpy if it's a tensor
+    if hasattr(loc, 'numpy'):
+        loc_np = loc.numpy()
+    else:
+        loc_np = np.array(loc)
+
+    # Check if we have enough samples for 2D KDE
+    if loc_np.shape[0] < 3:  # Need at least 3 samples for 2D KDE
+        # If too few samples, create simple levels based on min/max
+        levels = [0.0 for _ in target_levels]
+        return levels, None, None, None, None
+
+    loc_pdf = gaussian_kde(loc_np.T)
+    x = np.linspace(min(loc_np[:, 0]), max(loc_np[:, 0]), 100)
+    y = np.linspace(min(loc_np[:, 1]), max(loc_np[:, 1]), 100)
     x, y = np.meshgrid(x, y)
 
     # Evaluate the PDF at the grid points

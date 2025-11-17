@@ -262,30 +262,33 @@ if __name__ == "__main__":
 
             Model.eval()
 
-            # testing set
-            loss_test_all = 0.0
-            for batch in testloader:
-                event_time_non_mask, event_loc_non_mask, enc_out_non_mask = Batch2toModel(batch, Model.transformer)
-                loss = Model.decoder(torch.cat((event_time_non_mask, event_loc_non_mask), dim=-1), enc_out_non_mask)
-                loss_test_all += loss.item() * event_time_non_mask.shape[0]
+            # ! testing set
+            # loss_test_all = 0.0
+            # for batch in testloader:
+            #     event_time_non_mask, event_loc_non_mask, enc_out_non_mask = Batch2toModel(batch, Model.transformer)
+            #     loss = Model.decoder(torch.cat((event_time_non_mask, event_loc_non_mask), dim=-1), enc_out_non_mask)
+            #     loss_test_all += loss.item() * event_time_non_mask.shape[0]
 
             current_step = 0
             is_last = False
             last_sample = None
+            # 开始计时 - 记录整个测试集生成的开始时间
+            start_time = time.time()
             while current_step < opt.samplingsteps:
                 if (current_step + opt.per_step) >= opt.samplingsteps:
                     is_last = True
-                cs_time_all = torch.zeros(5)
-                cs_loc_all = torch.zeros(5)
-                cs2_time_all = torch.zeros(5)
-                cs2_loc_all = torch.zeros(5)
-                acc_all = 0
-                ece_all = 0
-                correct_list_all = torch.zeros(10)
-                num_list_all = torch.zeros(10)
+                # cs_time_all = torch.zeros(5)
+                # cs_loc_all = torch.zeros(5)
+                # cs2_time_all = torch.zeros(5)
+                # cs2_loc_all = torch.zeros(5)
+                # acc_all = 0
+                # ece_all = 0
+                # correct_list_all = torch.zeros(10)
+                # num_list_all = torch.zeros(10)
                 mae_temporal, mae_spatial, total_num = 0.0, 0.0, 0.0
                 sampled_record_all = []
                 gt_record_all = []
+
                 for idx, batch in enumerate(testloader):
                     # First denormalize `time` & `loc` for further UQ/UC stage
                     event_time_non_mask, event_loc_non_mask, enc_out_non_mask = Batch2toModel(batch, Model.transformer)
@@ -295,9 +298,11 @@ if __name__ == "__main__":
                     total_num += real_loc.shape[0]
                     gt_record_all.append(torch.cat((real_time, real_loc), -1))
 
-
                     sampled_seq_all, sampled_seq_temporal_all, sampled_seq_spatial_all, sampled_seq_mark_all = [], [], [], []
+                    # 开始计时 - 记录整个测试集生成的开始时间
+                    this_step_start_time = time.time()
                     for i in range(int(300 / opt.n_samples)):  # train: n_samples = 1, test: n_samples = 30
+                        print("batch size:", event_time_non_mask.shape[0])
                         sampled_seq, score_mark = Model.decoder.sample_from_last(
                             batch_size=event_time_non_mask.shape[0],
                             step=opt.per_step,
@@ -305,6 +310,13 @@ if __name__ == "__main__":
                             cond=enc_out_non_mask,
                             last_sample=last_sample[idx][i] if last_sample is not None else None)
                         # print(sampled_seq, score_mark)
+                        # 结束计时 - 记录整个测试集生成的结束时间
+                        generation_end_time = time.time()
+                        generation_time = generation_end_time - this_step_start_time
+                        print(
+                            f'One batch: Generation time for step {current_step}-{current_step+opt.per_step}: {generation_time:.4f} seconds'
+                        )
+
                         sampled_seq_all.append(
                             (sampled_seq.detach(), score_mark.detach() if score_mark is not None else None))
                         sampled_seq_temporal_all.append(
@@ -314,46 +326,54 @@ if __name__ == "__main__":
                         sampled_seq_mark_all.append(score_mark.detach().cpu())
 
                     sampled_record_all.append(sampled_seq_all)
-                    gen_time = torch.cat(sampled_seq_temporal_all, 1).mean(1, keepdim=True)
-                    assert real_time.shape == gen_time.shape
-                    mae_temporal += torch.abs(real_time - gen_time).sum().item()
 
-                    gen_loc = torch.cat(sampled_seq_spatial_all, 1).mean(1)
-                    assert real_loc[:, -2:].shape == gen_loc.shape
-                    mae_spatial += torch.sqrt(torch.sum((real_loc[:, -2:] - gen_loc)**2, dim=-1)).sum().item()
+                # 以下是计算评估指标的代码，不计入生成时间
+                # for idx, batch in enumerate(testloader):
+                #     event_time_non_mask, event_loc_non_mask, enc_out_non_mask = Batch2toModel(batch, Model.transformer)
+                #     real_time = denormalization(event_time_non_mask[:, 0, :], MAX[1], MIN[1], opt.log_normalization)
+                #     real_loc = event_loc_non_mask[:, 0, :]
+                #     real_loc = denormalization(real_loc, torch.tensor([MAX[2:]]), torch.tensor([MIN[2:]]))
 
-                    if score_mark is not None:
-                        gen_mark = torch.mode(torch.max(torch.cat(sampled_seq_mark_all, 1), dim=-1)[1], 1)[0]
-                        acc_all += torch.sum(gen_mark == (real_loc[:, 0] - 1))
+                #     gen_time = torch.cat(sampled_seq_temporal_all, 1).mean(1, keepdim=True)
+                #     assert real_time.shape == gen_time.shape
+                #     mae_temporal += torch.abs(real_time - gen_time).sum().item()
 
-                    if opt.mode == 'test':
-                        calibration_score = get_calibration_score(sampled_seq_temporal_all, sampled_seq_spatial_all,
-                                                                  sampled_seq_mark_all, real_time, real_loc)
-                        cs_time_all += calibration_score[0]
-                        cs_loc_all += calibration_score[1]
-                        cs2_time_all += calibration_score[2]
-                        cs2_loc_all += calibration_score[3]
-                        if score_mark is not None:
-                            ece_all += calibration_score[4]
-                            correct_list_all += calibration_score[5]
-                            num_list_all += calibration_score[6]
+                #     gen_loc = torch.cat(sampled_seq_spatial_all, 1).mean(1)
+                #     assert real_loc[:, -2:].shape == gen_loc.shape
+                #     mae_spatial += torch.sqrt(torch.sum((real_loc[:, -2:] - gen_loc)**2, dim=-1)).sum().item()
+
+                #     if score_mark is not None:
+                #         gen_mark = torch.mode(torch.max(torch.cat(sampled_seq_mark_all, 1), dim=-1)[1], 1)[0]
+                #         acc_all += torch.sum(gen_mark == (real_loc[:, 0] - 1))
+
+                #     if opt.mode == 'test':
+                #         calibration_score = get_calibration_score(sampled_seq_temporal_all, sampled_seq_spatial_all,
+                #                                                   sampled_seq_mark_all, real_time, real_loc)
+                #         cs_time_all += calibration_score[0]
+                #         cs_loc_all += calibration_score[1]
+                #         cs2_time_all += calibration_score[2]
+                #         cs2_loc_all += calibration_score[3]
+                #         if score_mark is not None:
+                #             ece_all += calibration_score[4]
+                #             correct_list_all += calibration_score[5]
+                #             num_list_all += calibration_score[6]
 
                 last_sample = sampled_record_all
                 current_step += opt.per_step
 
                 if opt.mode == 'test':
-                    cs_time_all /= total_num
-                    cs_loc_all /= total_num
-                    cs2_time_all /= total_num
-                    cs2_loc_all /= total_num
-                    ece_all /= total_num
-                    correct_list_all /= num_list_all
+                    #     cs_time_all /= total_num
+                    #     cs_loc_all /= total_num
+                    #     cs2_time_all /= total_num
+                    #     cs2_loc_all /= total_num
+                    #     ece_all /= total_num
+                    #     correct_list_all /= num_list_all
                     print('Step: ', current_step)
-                    print('Calibration Score Quantile: ', cs2_time_all, cs2_loc_all)
-                    print('Calibration Score: ', cs_time_all.mean().item(), cs_loc_all.mean().item())
-                    print('MAE: ', mae_temporal / total_num, mae_spatial / total_num)
-                    if score_mark is not None:
-                        print('Mark: ', acc_all / total_num, ece_all, correct_list_all)
+                    #     print('Calibration Score Quantile: ', cs2_time_all, cs2_loc_all)
+                    #     print('Calibration Score: ', cs_time_all.mean().item(), cs_loc_all.mean().item())
+                    #     print('MAE: ', mae_temporal / total_num, mae_spatial / total_num)
+                    #     if score_mark is not None:
+                    #         print('Mark: ', acc_all / total_num, ece_all, correct_list_all)
 
                 global_step = itr if opt.mode == 'train' else current_step
 
@@ -361,10 +381,13 @@ if __name__ == "__main__":
                 torch.save(Model.state_dict(), model_path + 'model_{}.pkl'.format(itr))
                 print('Model Saved to {}'.format(model_path + 'model_{}.pkl').format(itr))
             if opt.mode == 'test':
-                torch.save([sampled_record_all, gt_record_all],
-                           './samples/test_{}_{}_sigma_{}_{}_steps_{}_log_{}.pkl'.format(
-                               opt.dataset, opt.model, opt.sigma_time, opt.sigma_loc, opt.samplingsteps,
-                               opt.log_normalization))
+                # torch.save([sampled_record_all, gt_record_all],
+                #            './samples/test_{}_{}_sigma_{}_{}_steps_{}_log_{}.pkl'.format(
+                #                opt.dataset, opt.model, opt.sigma_time, opt.sigma_loc, opt.samplingsteps,
+                #                opt.log_normalization))
+                all_time = generation_end_time - start_time
+                print('Total Test time (150 sequences for Earthquake): {:.4f} seconds'.format(
+                    all_time))  # cost time of 2000 steps' iterative sampling
                 break
 
             # validation set
