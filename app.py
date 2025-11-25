@@ -1,3 +1,147 @@
+"""
+app.py - SMASH 项目主程序入口
+
+本文件是 SMASH (Score Matching based Spatio-temporal Hawkes) 项目的主程序入口，
+负责整合模型组件、数据加载、训练循环和评估流程。
+
+项目概述：
+=========
+SMASH 是一个基于分数匹配（Score Matching）的时空事件序列预测框架，
+用于预测下一个事件的发生时间、空间位置以及事件类型（可选）。
+
+主要功能模块：
+=============
+
+1. 命令行参数配置 (get_args)
+---------------------------
+关键参数说明：
+    --seed: 随机种子，确保实验可复现（默认1234）
+    --model: 模型名称，默认'SMASH'
+    --mode: 运行模式，'train' 或 'test'
+    --total_epochs: 总训练轮数（默认1000）
+    --dim: 数据维度，2表示(时间+空间)，3表示(时间+空间+类型)
+    --dataset: 数据集选择，支持 'Earthquake', 'crime', 'football'
+    --batch_size: 批次大小（默认32）
+    --samplingsteps: 采样步数（默认500），影响生成质量
+    --n_samples: 每次采样的样本数（默认100），用于不确定性估计
+    --log_normalization: 是否对时间间隔取对数（默认1=是）
+    --sigma_time/sigma_loc: 时间/空间的噪声尺度参数，对应分数匹配中的噪声水平
+    --langevin_step: Langevin动力学采样步长，默认0.005
+    --loss_lambda/loss_lambda2: 损失函数权重超参数
+
+2. 数据处理 (data_loader)
+------------------------
+数据加载流程：
+    1) 从 pickle 文件加载训练/验证/测试数据
+    2) 计算时间间隔（支持对数变换）
+    3) 计算全局最大最小值用于归一化（不太规范：从 train+val+test 所有数据计算）
+    4) 对所有特征进行 [0,1] 归一化
+    5) 创建 DataLoader 对象
+
+PS: 
+    原始数据 → ① 对数变换(仅针对时间间隔) → ② Min-Max归一化(所有特征) → 模型输入
+    模型输出 → 反Min-Max → 反log(即exp) → 真实时间间隔
+
+Q: 为什么要对时间间隔取对数？
+A: 时间间隔通常呈长尾分布（大多数间隔很短，少数间隔很长）
+   对数变换将其转换为近似正态分布，神经网络更容易学习
+
+数据格式：
+    每个事件包含 [绝对时间, 时间间隔, 事件类型（可选）, x坐标, y坐标]
+    - dim=2: 只有时空信息
+    - dim=3: 包含事件类型/标记信息
+
+3. 批数据处理 (Batch2toModel)
+----------------------------
+将批量数据转换为模型输入格式：
+    1) 分离时间和空间特征
+    2) 通过 Transformer 编码器获取隐藏表示
+    3) 移除 padding 位置，只保留有效事件
+    4) 构造监督信号（用前一时刻预测后一时刻）
+
+4. 模型架构
+-----------
+三个核心组件：
+    Models.Transformer_ST: 时空分离的 Transformer 编码器
+        - 分别对时间、空间、类型信息建模
+        - 输出“条件向量”用于生成模型
+    
+    SM_model.ScoreMatch_module: 分数匹配网络
+        - 估计数据分布的梯度（分数函数）
+        - 支持条件生成
+    
+    SM_model.SMASH: 基于分数匹配的采样器
+        - 使用 Langevin 动力学进行采样
+        - 支持渐进式多步采样
+
+    Model_all: 包装类，整合 Transformer 和解码器
+
+5. 训练流程
+-----------
+训练循环包含：
+    1) 学习率预热（前5个epoch线性增加）
+    2) 之后学习率线性衰减（1e-3 -> 5e-5）
+    3) 每10个epoch进行一次验证
+    4) 早停机制（验证集连续50次无改善则停止）
+    5) 梯度裁剪（max_norm=1.0）防止梯度爆炸
+
+6. 评估指标
+-----------
+测试阶段计算的指标：
+    - MAE (Mean Absolute Error): 时间和空间的平均绝对误差
+    - Calibration Score: 时间和空间上（连续空间）的校准分数，衡量不确定性估计的准确性
+    - Accuracy: 事件类型预测准确率（dim=3时）
+    - ECE (Expected Calibration Error): 事件类型（离散空间）的期望校准误差
+
+ATTENTION: SMASH中默认参与不确定性指标计算的TOTAL SAMPLES恒定为300，opt.n_samples仅制每次采样的样本数。
+
+辅助函数：
+=========
+- setup_init(): 设置随机种子，确保实验可复现
+- model_name(): 生成时间戳格式的模型名称
+- normalization(): 最大最小归一化
+- denormalization(): 反归一化，支持对数变换的逆操作
+- LR_warmup(): 学习率预热计算
+
+文件输出：
+=========
+训练模式：
+    - ModelSave/dataset_{dataset}_model_{model}{timestamp}/ 目录
+    - model_{epoch}.pkl: 每10个epoch保存一次
+    - model_best.pkl: 验证集最优模型
+
+测试模式：
+    - samples/test_{dataset}_{model}_sigma_{}_steps_{}.pkl
+    - 包含生成样本和真实标签
+
+使用示例：
+=========
+训练模型：
+    python app.py --mode train --dataset Earthquake --dim 2 --total_epochs 500
+
+测试模型：
+    python app.py --mode test --dataset Earthquake --weight_path ./ModelSave/xxx/model_best.pkl
+
+依赖模块：
+=========
+- model.Transformer_ST: 时空标Transformer编码器
+- model.Model_all: 模型包装类
+- model.ScoreMatch_module: 分数匹配网络
+- model.SMASH: 采样器
+- model.Dataset: 数据加载器
+- model.Metric: 评估指标计算
+
+注意事项：
+=========
+1. 训练前确保数据集已放置在 dataset/{dataset_name}/ 目录下
+2. 测试时需要指定训练好的模型权重路径
+3. 采样步数越大，生成质量越高但速度越慢
+4. n_samples 影响不确定性估计的精度
+5. 对数归一化对时间间隔差异大（长尾分布）的数据效果更好
+
+最后更新：2025年11月
+"""
+
 import torch
 import numpy as np
 from model import Transformer_ST, Model_all, ScoreMatch_module, SMASH
@@ -297,7 +441,9 @@ if __name__ == "__main__":
 
 
                     sampled_seq_all, sampled_seq_temporal_all, sampled_seq_spatial_all, sampled_seq_mark_all = [], [], [], []
-                    for i in range(int(300 / opt.n_samples)):  # train: n_samples = 1, test: n_samples = 30
+                    # Test Stage: must Sample 300 samples for UQ/UC evaluation
+                    # n_samples(num of generated samples per call): train: = 1, test: n_samples = 30
+                    for i in range(int(300 / opt.n_samples)):
                         sampled_seq, score_mark = Model.decoder.sample_from_last(
                             batch_size=event_time_non_mask.shape[0],
                             step=opt.per_step,

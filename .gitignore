@@ -7,8 +7,9 @@
 
 # Other files and folders
 .vscode/
-*logs/
-ModelSave/
+# *logs/
+# ModelSave/
+.DS_Store
 
 # Executables
 *.swf
@@ -24,4 +25,3 @@ ModelSave/
 # information for Eclipse / Flash Builder.
 test.ipynb
 app_new.py
-dataset/.DS_Store
