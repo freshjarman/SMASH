@@ -196,7 +196,7 @@ def get_args():
     parser.add_argument('--dataset',
                         type=str,
                         default='Earthquake',
-                        choices=['Earthquake', 'crime', 'football'],
+                        choices=['Earthquake', 'crime', 'football', 'Earthquake-stpp', 'crime-stpp', 'football-stpp'],
                         help='')
     parser.add_argument('--batch_size', type=int, default=32, help='')
     parser.add_argument('--samplingsteps', type=int, default=500, help='')
@@ -243,29 +243,32 @@ def data_loader(opt):
     test_data = pickle.load(f)
     test_data = [[list(i) for i in u] for u in test_data]
 
-    if not opt.log_normalization:
-        train_data = [[[i[0], i[0] - u[index - 1][0] if index > 0 else i[0], i[1] + 1] + i[2:]
-                       for index, i in enumerate(u)] for u in train_data]
-        val_data = [[[i[0], i[0] - u[index - 1][0] if index > 0 else i[0], i[1] + 1] + i[2:]
-                     for index, i in enumerate(u)] for u in val_data]
-        test_data = [[[i[0], i[0] - u[index - 1][0] if index > 0 else i[0], i[1] + 1] + i[2:]
-                      for index, i in enumerate(u)] for u in test_data]
-    else:
-        train_data = [
-            [[i[0],
-              math.log(max(i[0] - u[index - 1][0], 1e-4)) if index > 0 else math.log(max(i[0], 1e-4)), i[1] + 1] + i[2:]
-             for index, i in enumerate(u)] for u in train_data
-        ]
-        val_data = [
-            [[i[0],
-              math.log(max(i[0] - u[index - 1][0], 1e-4)) if index > 0 else math.log(max(i[0], 1e-4)), i[1] + 1] + i[2:]
-             for index, i in enumerate(u)] for u in val_data
-        ]
-        test_data = [
-            [[i[0],
-              math.log(max(i[0] - u[index - 1][0], 1e-4)) if index > 0 else math.log(max(i[0], 1e-4)), i[1] + 1] + i[2:]
-             for index, i in enumerate(u)] for u in test_data
-        ]
+    # --- Support both STPP (dim=2) and MSTPP (dim=3) ---
+    # STPP input: [time, x, y] -> output: [time, dt, x, y]
+    # MSTPP input: [time, mark, x, y] -> output: [time, dt, mark+1, x, y]
+    def process_event(i, prev_time, log_norm, dim):
+        # Calculate time interval (dt)
+        dt = i[0] - prev_time if prev_time is not None else i[0]
+        if log_norm:
+            dt = math.log(max(dt, 1e-4))
+
+        if dim == 2:
+            # STPP: i[1]=x, i[2]=y, no mark offset
+            return [i[0], dt, i[1], i[2]]
+        else:
+            # MSTPP: i[1]=mark (needs +1 for padding), i[2:]=coords
+            return [i[0], dt, i[1] + 1] + i[2:]
+
+    train_data = [[
+        process_event(i, u[idx - 1][0] if idx > 0 else None, opt.log_normalization, opt.dim) for idx, i in enumerate(u)
+    ] for u in train_data]
+    val_data = [[
+        process_event(i, u[idx - 1][0] if idx > 0 else None, opt.log_normalization, opt.dim) for idx, i in enumerate(u)
+    ] for u in val_data]
+    test_data = [[
+        process_event(i, u[idx - 1][0] if idx > 0 else None, opt.log_normalization, opt.dim) for idx, i in enumerate(u)
+    ] for u in test_data]
+    # --- End of STPP/MSTPP support ---
 
     data_all = train_data + test_data + val_data
 

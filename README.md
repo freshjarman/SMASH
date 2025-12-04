@@ -25,6 +25,11 @@ cd ./scripts
 bash train_earthquake.sh
 ``
 
+### Training on STPP datasets (without marks)
+```python
+# two keys: --dim (2 for 2D spatial data, 1 for 1D spatial data), --dataset (Earthquake-stpp, Crime-stpp, Football-stpp)
+python -u app.py --mode train --dataset Earthquake-stpp --dim 2 --batch_size 32 --total_epochs 200
+```
 
 ## Note
 
