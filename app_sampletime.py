@@ -323,7 +323,9 @@ if __name__ == "__main__":
                             denormalization(sampled_seq[:, :, 0], MAX[1], MIN[1], opt.log_normalization))
                         sampled_seq_spatial_all.append(
                             denormalization(sampled_seq[:, :, -2:], torch.tensor([MAX[-2:]]), torch.tensor([MIN[-2:]])))
-                        sampled_seq_mark_all.append(score_mark.detach().cpu())
+                        # Only append mark when it exists (STPP mode has no marks)
+                        if score_mark is not None:
+                            sampled_seq_mark_all.append(score_mark.detach().cpu())
 
                     sampled_record_all.append(sampled_seq_all)
 

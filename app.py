@@ -460,7 +460,9 @@ if __name__ == "__main__":
                             denormalization(sampled_seq[:, :, 0], MAX[1], MIN[1], opt.log_normalization))
                         sampled_seq_spatial_all.append(
                             denormalization(sampled_seq[:, :, -2:], torch.tensor([MAX[-2:]]), torch.tensor([MIN[-2:]])))
-                        sampled_seq_mark_all.append(score_mark.detach().cpu())
+                        # Only append mark when it exists (STPP mode has no marks)
+                        if score_mark is not None:
+                            sampled_seq_mark_all.append(score_mark.detach().cpu())
 
                     sampled_record_all.append(sampled_seq_all)
                     gen_time = torch.cat(sampled_seq_temporal_all, 1).mean(1, keepdim=True)
@@ -471,18 +473,22 @@ if __name__ == "__main__":
                     assert real_loc[:, -2:].shape == gen_loc.shape
                     mae_spatial += torch.sqrt(torch.sum((real_loc[:, -2:] - gen_loc)**2, dim=-1)).sum().item()
 
-                    if score_mark is not None:
+                    # Only compute mark accuracy when marks exist (MSTPP mode)
+                    if score_mark is not None and len(sampled_seq_mark_all) > 0:
                         gen_mark = torch.mode(torch.max(torch.cat(sampled_seq_mark_all, 1), dim=-1)[1], 1)[0]
                         acc_all += torch.sum(gen_mark == (real_loc[:, 0] - 1))
 
                     if opt.mode == 'test':
+                        # Pass None for mark_all in STPP mode (empty list)
+                        mark_all_for_calib = sampled_seq_mark_all if len(sampled_seq_mark_all) > 0 else None
                         calibration_score = get_calibration_score(sampled_seq_temporal_all, sampled_seq_spatial_all,
-                                                                  sampled_seq_mark_all, real_time, real_loc)
+                                                                  mark_all_for_calib, real_time, real_loc)
                         cs_time_all += calibration_score[0]
                         cs_loc_all += calibration_score[1]
                         cs2_time_all += calibration_score[2]
                         cs2_loc_all += calibration_score[3]
-                        if score_mark is not None:
+                        # Only accumulate ECE when marks exist (MSTPP mode)
+                        if score_mark is not None and len(sampled_seq_mark_all) > 0:
                             ece_all += calibration_score[4]
                             correct_list_all += calibration_score[5]
                             num_list_all += calibration_score[6]
