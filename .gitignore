@@ -3,13 +3,15 @@
 *.ipynb_checkpoints/
 
 # dataset
-# dataset/
+dataset/
 
 # Other files and folders
 .vscode/
-# *logs/
-# ModelSave/
 .DS_Store
+*logs/
+ModelSave/
+notebooks/
+*.pdf
 
 # Executables
 *.swf
@@ -23,5 +25,6 @@
 # Project files, i.e. `.project`, `.actionScriptProperties` and `.flexProperties`
 # should NOT be excluded as they contain compiler settings and other important
 # information for Eclipse / Flash Builder.
-test.ipynb
-app_new.py
+
+# test.ipynb
+# app_new.py
